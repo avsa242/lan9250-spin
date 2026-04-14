@@ -66,12 +66,9 @@ pub startx(CS_PIN, SCK_PIN, MOSI_PIN, MISO_PIN, SCK_FREQ): s | id, bt, dr, b, rd
     return false
 
 
-pub preset()
+pub preset()'xxx
 
     mac_writereg(core.HMAC_CR, (1 << 20) | (1<<18) | (1 << 8) | core.MAC_TX_ENA | core.MAC_RX_ENA)
-    'repeat
-    'until phy_link_state()
-    'ser.strln(@"link UP")
 
 
 pub dev_id(): i
@@ -84,12 +81,13 @@ pub dev_id(): i
    
 pub dev_ready(): f
 ' Flag indicating the device is ready
+'   Returns:    true (-1) or false (0)
     f := readreg(core.HW_CFG)
     return f.[core.READY] == 1                  ' is the READY bit set?
 
 
 pub fifo_rx_bytes(): b
-
+' Get the number of bytes received in the FIFO
     b := readreg(core.RX_FIFO_INF)
     _rcv_status_len := ( (b >> core.RXSUSED) & core.RXSUSED_BITS )
 
@@ -97,7 +95,7 @@ pub fifo_rx_bytes(): b
 
 
 pub rcv_status_len(): l
-
+' Get the length of the receive status
     return ( (readreg(core.RX_FIFO_INF) >> core.RXSUSED) & core.RXSUSED_BITS )
 
 
@@ -113,7 +111,7 @@ con
     FC_MCAST    = 1 << 3                        ' flow control on multicast frame
 
 pub flow_ctrl_frame_mask(m): c
-
+' Configure frame flow control
     c := readreg(core.AFC_CFG)
     if ( (m >= %0000) and (m <= %1111) )
         m := (c & core.FCFRAME_MASK) | m
@@ -276,7 +274,7 @@ pub interrupt(): i
 
 
 pub mac_rx_enabled(e): c
-
+' Enable host MAC receiver
     c := mac_readreg(core.HMAC_CR)
     case abs(e)
         0, 1:
@@ -287,7 +285,7 @@ pub mac_rx_enabled(e): c
 
 
 pub mac_tx_enabled(e): c
-
+' Enable host MAC transmitter
     c := mac_readreg(core.HMAC_CR)
     case abs(e)
         0, 1:
@@ -320,13 +318,15 @@ pub phy_full_duplex_ena(s=-2): c
 
 
 pub phy_link_state(): s
-
+' Get the PHY's current link state
     s := 0
     return (phy_readreg(core.PHY_BASIC_STATUS) >> core.LINK_STATE) & 1
 
 
 pub rd_block(p_dest, len)
-
+' Read received data from the FIFO
+'   p_dest:     destination to copy the data to (pointer)
+'   len:        length of data to copy
     pinl(_CS)
         spi.wr_byte(core.READ)
         spi.wrword_msbf(core.RX_DATA_FIFO)
@@ -391,50 +391,51 @@ con
 
 
 pub rx_packet_len(): l
-
+' Get the length of the most recently received packet
     return (rx_status() >> RX_PKT_LEN_BITS) & $3fff
 
 
 pub last_rx_address_filter_failed(): s
-
+' Check if the last (cached) received packet failed RX address filtering
     return _rcv_status & FILTER_FAIL
 
 
 pub rx_address_filter_failed(): s
-
+' Check if the last received packet failed RX address filtering
     return rx_status() & FILTER_FAIL
 
 
 pub last_rx_passed_filter(): s
-
+' Check if the last (cached) received packet passed filtering
     return _rcv_status & PKT_FILTER
 
 
 pub rx_passed_filter(): s
-
+' Check if the last received packet passed filtering
     return rx_status() & PKT_FILTER
 
 
 pub last_rx_status(): s
-
+' Get the last (cached) received packet status
     return _rcv_status
 
 
 pub rx_status(): s
-
+' Get the last received packet status
     _rcv_status := readreg(core.RX_STATUS_FIFO)
     return _rcv_status
 
 
 pub set_phy_address(a) | tmp
-
+' Set the PHY's address
+'   a:  0..31 (default: 1; normally this doesn't need to be changed)
     tmp := mac_readreg(core.HMAC_MII_ACC)
     tmp &= core.PHY_ADDR_MASK
     mac_writereg(core.HMAC_MII_ACC, tmp | ( (a & core.PHY_ADDR_BITS) << core.PHY_ADDR) )
 
 
 pub set_pkt_filter(m)
-
+' Configure the receive packet filter
     mac_writereg(core.HMAC_CR, m)
 
 
@@ -470,13 +471,13 @@ pub send_frame(len, offs=0)'xxx give TX cmd A+B defaults, but make them configur
 
 
 pub start_frame(len=0)
-
+' Start a new Ethernet frame
     wr_long(core.CMD_A_FS | core.CMD_A_LS | len)
     wr_long(len)
 
 
 pub tx_ena(s): c
-
+' Enable transmission of packets
     c := readreg(core.TX_CFG)
     case abs(s)
         0, 1:
@@ -487,17 +488,19 @@ pub tx_ena(s): c
 
 
 pub tx_fifo_free(): b
-
+' Get the number of bytes free in the transmit FIFO
     return readreg(core.TX_FIFO_INF) & core.TXFREE_BITS
 
 
 pub txfifo_size(): s
-
+' Get the currently configured size of the transmit FIFO
     return ( ( (readreg(core.HW_CFG) >> core.TX_FIF_SZ) & core.TX_FIF_SZ_BITS) * 1024) - 512
 
 
 pub wr_block(p_src, len)
-
+' Write data to the transmit FIFO
+'   p_src:      source to copy data from (pointer)
+'   len:        length of data to write
     pinl(_CS)
         spi.wr_byte(core.WRITE)
         spi.wrword_msbf(core.TX_DATA_FIFO)
@@ -508,22 +511,22 @@ pub wr_block(p_src, len)
 
 
 pub wr_byte(b)
-
+' Write a single byte to the transmit FIFO
     wr_block(@b, 1)
 
 
 pub wr_long(l)
-
+' Write a single long to the transmit FIFO
     wr_block(@l, 4)
 
 
 pub wr_word(w)
-
+' Write a single word to the transmit FIFO
     wr_block(@w, 2)
 
 
 pri mac_readreg(addr): v | c
-
+' Read a MAC-specific register
     repeat
     while readreg(core.MAC_CSR_CMD) & core.CSR_BUSY
     writereg(core.MAC_CSR_CMD, core.CSR_BUSY | core.CSR_READ | addr)
@@ -537,7 +540,7 @@ pri mac_readreg(addr): v | c
 
 
 pri mac_writereg(offs, data) | tmp, c
-
+' Write a MAC-specific register
     repeat
     while mac_readreg(core.MAC_CSR_CMD) & core.CSR_BUSY
     writereg(core.MAC_CSR_DATA, data)
@@ -580,7 +583,7 @@ pri phy_writereg(idx, val) | c
 
 
 pri readreg(reg_nr): v
-
+' Read an ethernet register
     pinl(_CS)
         spi.wr_byte(core.READ)
         spi.wrword_msbf(reg_nr)
@@ -590,7 +593,7 @@ pri readreg(reg_nr): v
 
 
 pri writereg(reg_nr, val)
-
+' Write an ethernet register
     pinl(_CS)
         spi.wr_byte(core.WRITE)
         spi.wrword_msbf(reg_nr)
