@@ -24,7 +24,7 @@ P2/SPIN2:
 |-----------|----------|------------------|-------------|-----------------------|
 | P1        | SPIN1    | FlexSpin (7.6.5) | Bytecode    | Not yet implemented   |
 | P1        | SPIN1    | FlexSpin (7.6.5) | Native code | Not yet implemented   |
-| P2        | SPIN2    | FlexSpin (7.6.5) | NuCode      | Untested              |
+| P2        | SPIN2    | FlexSpin (7.6.5) | NuCode      | OK                    |
 | P2        | SPIN2    | FlexSpin (7.6.5) | Native code | OK                    |
 
 (other versions or toolchains not listed are __not supported__, and _may or may not_ work)
