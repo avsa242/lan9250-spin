@@ -1,0 +1,620 @@
+{                                                                                                       
+----------------------------------------------------------------------------------------------------
+    Filename:       net.eth.lan9250.spin2
+    Description:    Driver for the LAN9250 Ethernet Transceiver
+    Author:         Jesse Burt
+    Started:        Jul 27, 2025
+    Updated:        Apr 14, 2026
+    Copyright (c) 2026 - See end of file for terms of use.
+----------------------------------------------------------------------------------------------------
+}
+
+con
+
+    PM_WAKE     = 1 << core.PM_WAKE
+    DIS_1588    = 1 << core.DIS_1588
+    DIS_1588_TSU    = 1 << core.DIS_TSU_1588
+    ED_EN           = 1 << core.ED_EN
+    WOL_EN          = 1 << core.WOL_EN
+    PME_TYPE        = 1 << core.PME_TYPE
+    WOL_STS         = 1 << core.WOL_STS
+    PME_POL         = 1 << core.PME_POL
+    PME_EN          = 1 << core.PME_EN
+
+
+
+obj
+
+    core:   "core.con.lan9250.spin"
+    spi:    "com.spi.25mhz"
+
+
+var
+
+    long _frame_start_ptr
+    long _rcv_status
+    byte _rcv_status_len
+
+    byte _mac_local[6]
+
+    byte _CS
+
+
+pub startx(CS_PIN, SCK_PIN, MOSI_PIN, MISO_PIN, SCK_FREQ): s | id, bt, dr, b, rdl, l
+
+    if ( s := spi.init(SCK_PIN, MOSI_PIN, MISO_PIN, 0, SCK_FREQ) )
+        _CS := CS_PIN
+        pinh(CS_PIN)
+        waitms(100)
+
+        repeat
+            bt := readreg(core.BYTE_TEST)
+        until (bt == $8765_4321 )
+
+        writereg(core.RESET_CTL, core.RESET_DIGITAL)
+
+        repeat
+            bt := readreg(core.BYTE_TEST)
+        until (bt == $8765_4321 )
+
+        repeat
+            dr := dev_ready()
+        until dr
+
+        if ( (dev_id() >> 16) == $9250 )
+            return s+1
+    return false
+
+
+pub preset()
+
+    mac_writereg(core.HMAC_CR, (1 << 20) | (1<<18) | (1 << 8) | core.MAC_TX_ENA | core.MAC_RX_ENA)
+    'repeat
+    'until phy_link_state()
+    'ser.strln(@"link UP")
+
+
+pub dev_id(): i
+' Read the device ID and revision
+'   Returns:
+'       i.word[1]: part number (expected: $9250)
+'       i.word[0]: revision
+    return readreg(core.ID_REV)
+
+   
+pub dev_ready(): f
+' Flag indicating the device is ready
+    f := readreg(core.HW_CFG)
+    return f.[core.READY] == 1                  ' is the READY bit set?
+
+
+pub fifo_rx_bytes(): b
+
+    b := readreg(core.RX_FIFO_INF)
+    _rcv_status_len := ( (b >> core.RXSUSED) & core.RXSUSED_BITS )
+
+    return (b & core.RXDUSED_BITS)
+
+
+pub rcv_status_len(): l
+
+    return ( (readreg(core.RX_FIFO_INF) >> core.RXSUSED) & core.RXSUSED_BITS )
+
+
+pub fifo_wr_ptr(): p
+
+
+con
+
+    ' flow control settings
+    FC_ANY      = 1 << 0                        ' flow control on any frame
+    FC_ADDR     = 1 << 1                        ' flow control on address decode
+    FC_BCAST    = 1 << 2                        ' flow control on broadcast frame
+    FC_MCAST    = 1 << 3                        ' flow control on multicast frame
+
+pub flow_ctrl_frame_mask(m): c
+
+    c := readreg(core.AFC_CFG)
+    if ( (m >= %0000) and (m <= %1111) )
+        m := (c & core.FCFRAME_MASK) | m
+        writereg(core.AFC_CFG, m)
+    else
+        return (c & core.FCFRAME_BITS)
+
+
+pub flow_ctrl_hi_thresh(thr): c
+
+    c := readreg(core.AFC_CFG)
+    if ( (thr >= 0) and (thr <= 16320) )
+        thr := (c & core.AFC_HI_MASK) | ( (thr/64) << core.AFC_HI)
+        writereg(core.AFC_CFG, thr)
+    else
+        return ( (c >> core.AFC_HI) & core.AFC_HI_BITS) * 64
+
+
+pub flow_ctrl_lo_thresh(thr): c
+
+    c := readreg(core.AFC_CFG)
+    if ( (thr >= 0) and (thr <= 16320) )
+        thr := (c & core.AFC_LO_MASK) | ( (thr/64) << core.AFC_LO)
+        writereg(core.AFC_CFG, thr)
+    else
+        return ( (c >> core.AFC_LO) & core.AFC_LO_BITS) * 64
+
+
+pub get_node_address(p_addr)
+' Get this node's MAC address
+'   p_addr: pointer to 6-byte array to copy MAC address to
+    long[p_addr] := mac_readreg(core.HMAC_ADDRL)
+    word[p_addr+4] := (mac_readreg(core.HMAC_ADDRH) & core.HMAC_ADDRH_MASK)
+
+
+pub hash_perfect_filter_mode(m): c
+' Set address hash/perfect filter mode
+'   m:
+'       0:  perfect address filter according to node_address() setting
+'       1:  imperfect address filtering of multicast incoming frames according to hash table
+    c := mac_readreg(core.HMAC_CR)
+    case abs(m)
+        0, 1:
+            m := (c & core.HPFILT_MASK) | ( ( m & 1 ) << core.HPFILT)
+            mac_writereg(core.HMAC_CR, m)
+        other:
+            return ( ( (c >> core.HPFILT) & 1) == 1 )
+
+
+pub ignore_txstatus_overrun(e) | tmp
+' Allow transmitter to continue operation even if the TX status FIFO is full
+'   e:
+'       true (non-zero values): transmitter will continue if TX status FIFO is full
+'       false (0):              transmitter will be suspended if TX status FIFO is full
+    tmp := readreg(core.TX_CFG)
+    if ( e )
+        ifnot ( tmp & core.ALLOW_TXS_OR )
+            ' only update the register if the TXSAO bit isn't already set
+            writereg(core.TX_CFG, tmp | core.ALLOW_TXS_OR)
+    else
+        writereg(core.TX_CFG, tmp & core.TXSAO_MASK)
+
+
+pub int_clear(m)
+' Clear interrupt(s)
+'   See 'Interrupt flags' CON section for a list of interrupts that can be cleared
+    writereg(core.INT_STS, (m & core.INT_STS_CLEAR_MASK) )
+
+
+pub int_ena(e): c
+' Enable routing of interrupts to the IRQ pin
+'   e:
+'       true (-1 or 1): IRQ pin is set to interrupt state
+'       false (0):      IRQ pin output is disabled
+'       other values:   read the current setting
+'   NOTE: This setting has no effect on internal interrupt status.
+    c := readreg(core.IRQ_CFG)
+    case abs(e)
+        0, 1:
+            e := (c & core.IRQ_EN_MASK) | ( (e & 1) << core.IRQ_EN)
+            writereg(core.IRQ_CFG, e)
+        other:
+            return ( (c >> core.IRQ_EN) & 1 )
+
+
+con
+
+    ' Interrupt flags                                                               can clear with
+    ' Interrupt event symbols                   Description                         int_clear()
+    SW_INT_EN       = 1 << core.SW_INT_EN       ' software interrupt                Y
+    READY_EN        = 1 << core.READY_EN        ' device ready                      Y
+    EVNT_1588_EN    = 1 << core.EVNT_1588_EN    ' 1588 interrupt event              N
+    PHY_INT_EN      = 1 << core.PHY_INT_EN      ' PHY interrupt event               N
+    TXSTOP_INT_EN   = 1 << core.TXSTOP_INT_EN   ' TX stopped                        Y
+    RXSTOP_INT_EN   = 1 << core.RXSTOP_INT_EN   ' RX stopped                        Y
+    RXDFH_INT_EN    = 1 << core.RXDFH_INT_EN    ' RX dropped frame counter halfway  Y
+    TIOC_INT_EN     = 1 << core.TIOC_INT_EN     ' TX IOC                            Y
+    RXD_INT_EN      = 1 << core.RXDF_INT_EN     ' RX DMA                            Y
+    GPT_INT_EN      = 1 << core.GPT_INT_EN      ' GP timer                          Y
+    PME_INT_EN      = 1 << core.PME_INT_EN      ' power management                  Y
+    TXSO_EN         = 1 << core.TXSO_EN         ' TX status FIFO overflow           Y
+    RWT_INT_EN      = 1 << core.RWT_INT_EN      ' RX watchdog timeout               Y
+    RXE_INT_EN      = 1 << core.RXE_INT_EN      ' RX error                          Y
+    TXE_INT_EN      = 1 << core.TXE_INT_EN      ' TX error                          Y
+    GPIO_EN         = 1 << core.GPIO_EN         ' GPIO                              N
+    TDFO_EN         = 1 << core.TDFO_EN         ' TX data FIFO overrun              Y
+    TDFA_EN         = 1 << core.TDFA_EN         ' TX data FIFO available            Y
+    TSFF_EN         = 1 << core.TSFF_EN         ' TX status FIFO full               Y
+    TSFL_EN         = 1 << core.TSFL_EN         ' TX status FIFO level              Y
+    RXDF_INT_EN     = 1 << core.RXDF_INT_EN     ' RX dropped frame                  Y
+    RSSFF_EN        = 1 << core.RSSFF_EN        ' RX status FIFO full               Y
+    RSFL_EN         = 1 << core.RSFL_EN         ' RX status FIFO level              Y
+
+pub int_mask(): m
+' Get currently set interrupt mask
+    return readreg(core.INT_EN) & core.INT_EN_MASK
+
+
+con #0, INT_OPEN_DRAIN, INT_PUSH_PULL
+pub int_outp_type(t): c
+' Set interrupt pin output type
+'   p:
+'       INT_OPEN_DRAIN (0): open-drain
+'       INT_PUSH_PULL (1):  push-pull
+'       other values:       read the current setting
+    c := readreg(core.IRQ_CFG)
+    case t
+        INT_OPEN_DRAIN, INT_PUSH_PULL:
+            t := (c & core.IRQ_TYPE_MASK) | (t & 1)
+            writereg(core.IRQ_CFG, t)
+        other:
+            return (c & 1 )
+
+
+con #0, INT_ACTIVE_LOW, INT_ACTIVE_HIGH
+pub int_polarity(p): c
+' Set interrupt pin polarity
+'   p:
+'       INT_ACTIVE_LOW (0):     active low
+'       INT_ACTIVE_HIGH (1):    active high
+'       other values:           read the current setting
+    c := readreg(core.IRQ_CFG)
+    case p
+        INT_ACTIVE_LOW, INT_ACTIVE_HIGH:
+            p := (c & core.INT_POL_MASK) | ( (p & 1) << core.INT_POL)
+            writereg(core.IRQ_CFG, p)
+        other:
+            return ( (c >> core.INT_POL) & 1 )
+
+
+pub int_set_mask(m)
+' Set interrupt mask
+'   See 'interrupt flags' CON section
+    writereg(core.INT_EN, m & core.INT_EN_MASK)
+
+
+pub interrupt(): i
+' Get current interrupt state
+    return readreg(core.INT_STS) & core.INT_STS_MASK
+
+
+pub mac_rx_enabled(e): c
+
+    c := mac_readreg(core.HMAC_CR)
+    case abs(e)
+        0, 1:
+            e := (c & core.RXEN_MASK) | ( (e & 1) << core.RXEN)
+            mac_writereg(core.HMAC_CR, e)
+        other:
+            return ( ( (c >> core.RXEN) & 1) == 1)
+
+
+pub mac_tx_enabled(e): c
+
+    c := mac_readreg(core.HMAC_CR)
+    case abs(e)
+        0, 1:
+            e := (c & core.TXEN_MASK) | ( (e & 1) << core.TXEN)
+            mac_writereg(core.HMAC_CR, e)
+        other:
+            return ( ( (c >> core.TXEN) & 1) == 1)
+
+
+pub node_address(p_addr) | byte ma[6]
+' Set this node's MAC address
+'   p_addr: pointer to array containing 6-byte MAC address
+    bytemove(@ma, p_addr, 6)
+    mac_writereg(core.HMAC_ADDRL, ma[0] | (ma[1] << 8) | (ma[2] << 16) | (ma[3] << 24) )
+    mac_writereg(core.HMAC_ADDRH, ma[4] | (ma[5] << 8) )
+
+
+pub phy_full_duplex_ena(s=-2): c
+' Set PHY to full-duplex
+'   s:
+'       true (-1 or 1), false (0)
+'       other values:   read the current setting
+    c := mac_readreg(core.HMAC_CR)
+    case abs(s)
+        0, 1:
+            s := (c & core.FDPX_MASK) | ( (s & 1) << core.FDPX)
+            mac_writereg(core.HMAC_CR, s)
+        other:
+            return ( ( (c >> core.FDPX) & 1) == 1)
+
+
+pub phy_link_state(): s
+
+    s := 0
+    return (phy_readreg(core.PHY_BASIC_STATUS) >> core.LINK_STATE) & 1
+
+
+pub rd_block(p_dest, len)
+
+    pinl(_CS)
+        spi.wr_byte(core.READ)
+        spi.wrword_msbf(core.RX_DATA_FIFO)
+        spi.rdblock_lsbf(p_dest, len)
+        if ( len // 4 )
+            repeat 4-(len//4)
+                spi.rd_byte()
+    pinh(_CS)
+
+
+pub receive_own(f): c
+' Enable reception of frames generated by this node while transmitting
+'   f:
+'       true (-1 or 1), false (0)
+'       other values:           return the current setting
+'   NOTE: This setting has no effect when the PHY is in full-duplex mode.
+    c := mac_readreg(core.HMAC_CR)
+    case abs(f)
+        0, 1:
+            f := (c & core.RCVOWN_MASK) | ( ( (f & 1) ^ 1) << core.RCVOWN)
+            mac_writereg(core.HMAC_CR, f)
+        other:
+            return ( (c >> core.RCVOWN) & 1) == 0
+
+
+con
+
+    ' RX status (use with rx_status() and last_rx_status() )
+    PKT_FILTER_BIT          = 31
+    PKT_FILTER              = 1 << PKT_FILTER_BIT
+    FILTER_FAIL_BIT         = 30
+    FILTER_FAIL             = 1 << FILTER_FAIL_BIT
+    RX_PKT_LEN_BITS         = 16'..29
+    RX_PKT_LEN              = $3fff << RX_PKT_LEN_BITS
+    ERROR_STATUS_BIT        = 15
+    ERROR_STATUS            = 1 << ERROR_STATUS_BIT
+    ' b14 RESERVED
+    BCAST_FRAME_BIT         = 13
+    BCAST_FRAME             = 1 << BCAST_FRAME_BIT
+    LEN_ERROR_BIT           = 12
+    LEN_ERROR               = 1 << LEN_ERROR_BIT
+    RUNT_FRAME_BIT          = 11
+    RUNT_FRAME              = 1 << RUNT_FRAME_BIT
+    MCAST_FRAME_BIT         = 10
+    MCAST_FRAME             = 1 << MCAST_FRAME_BIT
+    FRAME_TOO_LONG_BIT      = 7
+    FRAME_TOO_LONG          = 1 << FRAME_TOO_LONG_BIT
+    COLLISION_SEEN_BIT      = 6
+    COLLISION_SEEN          = 1 << COLLISION_SEEN_BIT
+    FRAME_TYPE_BIT          = 5
+    FRAME_TYPE              = 1 << FRAME_TYPE_BIT
+        FT_ETH              = 1
+        FT_802_3            = 0
+    RX_WD_TIMEOUT_BIT       = 4
+    RX_WD_TIMEOUT           = 1 << RX_WD_TIMEOUT_BIT
+    MII_ERROR_BIT           = 3
+    MII_ERROR               = 1 << MII_ERROR_BIT
+    DRIBBLING_BIT_BIT       = 2
+    DRIBBLING_BIT           = 1 << DRIBBLING_BIT_BIT
+    CRC_ERROR_BIT           = 1 
+    CRC_ERROR               = 1 << CRC_ERROR_BIT
+
+
+pub rx_packet_len(): l
+
+    return (rx_status() >> RX_PKT_LEN_BITS) & $3fff
+
+
+pub last_rx_address_filter_failed(): s
+
+    return _rcv_status & FILTER_FAIL
+
+
+pub rx_address_filter_failed(): s
+
+    return rx_status() & FILTER_FAIL
+
+
+pub last_rx_passed_filter(): s
+
+    return _rcv_status & PKT_FILTER
+
+
+pub rx_passed_filter(): s
+
+    return rx_status() & PKT_FILTER
+
+
+pub last_rx_status(): s
+
+    return _rcv_status
+
+
+pub rx_status(): s
+
+    _rcv_status := readreg(core.RX_STATUS_FIFO)
+    return _rcv_status
+
+
+pub set_phy_address(a) | tmp
+
+    tmp := mac_readreg(core.HMAC_MII_ACC)
+    tmp &= core.PHY_ADDR_MASK
+    mac_writereg(core.HMAC_MII_ACC, tmp | ( (a & core.PHY_ADDR_BITS) << core.PHY_ADDR) )
+
+
+pub set_pkt_filter(m)
+
+    mac_writereg(core.HMAC_CR, m)
+
+
+pub set_txfifo_size(s)
+' Set the TX FIFO size
+'   s:  size, from 2048 to 14336 in 1KB increments
+'       (e.g., 2048 = 2KB, 3072 = 3KB, etc)
+'   NOTE: 512 bytes of the specified size will be used by the chip internally for TX status.
+'   NOTE: The RX FIFO size will be 16384 minus the remaining space after allocation to the TX FIFO.
+'       e.g., if set_txfifo_sz(4096), RX FIFO size will be 16384-4096=12288
+    writereg(core.HW_CFG, core.MBO | ( (s/1024) << core.TX_FIF_SZ) )
+
+
+pub send_frame(len, offs=0)'xxx give TX cmd A+B defaults, but make them configurable
+' Send an ethernet frame
+'   len:    frame length, in bytes
+'   offs:   offset within FIFO where frame lies (optional; default is 0 if unspecified)
+    _frame_start_ptr := fifo_wr_ptr()           ' remember current FIFO wr position for later
+
+    ' write TX command 'A': interrupt on completion, align buffer end, set offset,
+    '   mark this as first segment, mark this as last segment
+    writereg(   core.TX_DATA_FIFO, ...
+                core.CMD_A_INT_ON_COMP | ...
+                core.CMD_A_ALIGN_16B | ...
+                (offs << core.DSTART_OFFS) | ...
+                core.CMD_A_FS | ...
+                core.CMD_A_LS | ...
+                len)
+
+    ' write TX command 'B'
+    writereg(   core.TX_DATA_FIFO, core.CMD_B_PACKET_TAG | len)
+'    writereg(   core.TX_DATA_FIFO, 0)
+
+
+pub start_frame(len=0)
+
+    wr_long(core.CMD_A_FS | core.CMD_A_LS | len)
+    wr_long(len)
+
+
+pub tx_ena(s): c
+
+    c := readreg(core.TX_CFG)
+    case abs(s)
+        0, 1:
+            s := (c & core.TX_ON_MASK) | (s & 1) << core.TX_ON
+            writereg(core.TX_CFG, s)
+        other:
+            return ( ( (c >> core.TX_ON) & 1) == 1)
+
+
+pub tx_fifo_free(): b
+
+    return readreg(core.TX_FIFO_INF) & core.TXFREE_BITS
+
+
+pub txfifo_size(): s
+
+    return ( ( (readreg(core.HW_CFG) >> core.TX_FIF_SZ) & core.TX_FIF_SZ_BITS) * 1024) - 512
+
+
+pub wr_block(p_src, len)
+
+    pinl(_CS)
+        spi.wr_byte(core.WRITE)
+        spi.wrword_msbf(core.TX_DATA_FIFO)
+        spi.wrblock_lsbf(p_src, len)
+        if ( len // 4 )                         ' make sure data is long-aligned:
+            spi.wr_bytex($00, 4-(len//4) )      '   pad with zero(es) if not
+    pinh(_CS)
+
+
+pub wr_byte(b)
+
+    wr_block(@b, 1)
+
+
+pub wr_long(l)
+
+    wr_block(@l, 4)
+
+
+pub wr_word(w)
+
+    wr_block(@w, 2)
+
+
+pri mac_readreg(addr): v | c
+
+    repeat
+    while readreg(core.MAC_CSR_CMD) & core.CSR_BUSY
+    writereg(core.MAC_CSR_CMD, core.CSR_BUSY | core.CSR_READ | addr)
+
+    readreg(core.BYTE_TEST)
+    repeat
+        c := readreg(core.MAC_CSR_CMD)
+    while ( c.[core.HMAC_CSR_BUSY] == 1 )
+
+    v := readreg(core.MAC_CSR_DATA)
+
+
+pri mac_writereg(offs, data) | tmp, c
+
+    repeat
+    while mac_readreg(core.MAC_CSR_CMD) & core.CSR_BUSY
+    writereg(core.MAC_CSR_DATA, data)
+    tmp := core.CSR_BUSY | offs
+
+    writereg(core.MAC_CSR_CMD, tmp)
+    readreg(core.BYTE_TEST)
+    repeat
+        c := readreg(core.MAC_CSR_CMD)
+    while ( c.[core.HMAC_CSR_BUSY] == 1 )
+
+
+pri phy_readreg(idx): v | c
+' Read a PHY register's current value
+    repeat
+        c := mac_readreg(core.HMAC_MII_ACC)
+    while ( c.[core.MIIBZY] == 1 )
+
+    mac_writereg(core.HMAC_MII_ACC, ...
+                    core.PHY_ADDR_DEF | ...
+                    (idx & core.MIIRINDA_BITS) << core.MIIRINDA)
+
+    repeat
+        c := mac_readreg(core.HMAC_MII_ACC)
+    while ( c & core.MII_BUSY)'.[core.MIIBZY] == 1 )
+
+    return mac_readreg(core.HMAC_MII_DATA)
+
+
+pri phy_writereg(idx, val) | c
+' Write a value to a PHY register
+    mac_writereg(core.HMAC_MII_DATA, val)
+    mac_writereg(core.HMAC_MII_ACC, ...
+                    core.MII_BUSY | core.MII_WRITE | core.PHY_ADDR_DEF | ...
+                    (idx << core.MIIRINDA) & core.MIIRINDA_BITS )
+
+    repeat
+        c := mac_readreg(core.HMAC_MII_ACC)
+    while (c & core.MII_BUSY)
+
+
+pri readreg(reg_nr): v
+
+    pinl(_CS)
+        spi.wr_byte(core.READ)
+        spi.wrword_msbf(reg_nr)
+        v := 0
+        spi.rdblock_lsbf(@v, 4)
+    pinh(_CS)
+
+
+pri writereg(reg_nr, val)
+
+    pinl(_CS)
+        spi.wr_byte(core.WRITE)
+        spi.wrword_msbf(reg_nr)
+        spi.wrblock_lsbf(@val, 4)         ' write value directly
+    pinh(_CS)
+
+
+dat
+{
+Copyright 2026 Jesse Burt
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
+associated documentation files (the "Software"), to deal in the Software without restriction,
+including without limitation the rights to use, copy, modify, merge, publish, distribute,
+sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or
+substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT
+NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
+OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+}
+
