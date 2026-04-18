@@ -4,15 +4,15 @@
     Description:    Driver for the LAN9250 Ethernet Transceiver
     Author:         Jesse Burt
     Started:        Jul 27, 2025
-    Updated:        Apr 14, 2026
+    Updated:        Apr 18, 2026
     Copyright (c) 2026 - See end of file for terms of use.
 ----------------------------------------------------------------------------------------------------
 }
 
 con
 
-    PM_WAKE     = 1 << core.PM_WAKE
-    DIS_1588    = 1 << core.DIS_1588
+    PM_WAKE         = 1 << core.PM_WAKE
+    DIS_1588        = 1 << core.DIS_1588
     DIS_1588_TSU    = 1 << core.DIS_TSU_1588
     ED_EN           = 1 << core.ED_EN
     WOL_EN          = 1 << core.WOL_EN
@@ -21,6 +21,12 @@ con
     PME_POL         = 1 << core.PME_POL
     PME_EN          = 1 << core.PME_EN
 
+
+    #0, DOWN, UP
+
+    MTU_MAX         = 1536
+
+    PF_PROMISCUOUS  = 1 << core.PRMS
 
 
 obj
@@ -62,13 +68,20 @@ pub startx(CS_PIN, SCK_PIN, MOSI_PIN, MISO_PIN, SCK_FREQ): s | id, bt, dr, b, rd
         until dr
 
         if ( (dev_id() >> 16) == $9250 )
+            DEBUG("lan9250: found device")
             return s+1
     return false
 
 
+pub preset_fdx = preset
 pub preset()'xxx
 
-    mac_writereg(core.HMAC_CR, (1 << 20) | (1<<18) | (1 << 8) | core.MAC_TX_ENA | core.MAC_RX_ENA)
+    mac_rx_enabled(false)
+    writereg(core.RX_CFG, 0)
+    mac_rx_enabled(true)
+
+    mac_writereg(core.HMAC_CR, (1 << core.FDPX) | (1 << core.PADSTR) | core.MAC_TX_ENA | core.MAC_RX_ENA)
+    tx_ena(true)
 
 
 pub dev_id(): i
@@ -86,6 +99,10 @@ pub dev_ready(): f
     return f.[core.READY] == 1                  ' is the READY bit set?
 
 
+pub fifo_rd_ptr(): p
+' Not supported by the hardware
+
+
 pub fifo_rx_bytes(): b
 ' Get the number of bytes received in the FIFO
     b := readreg(core.RX_FIFO_INF)
@@ -94,12 +111,11 @@ pub fifo_rx_bytes(): b
     return (b & core.RXDUSED_BITS)
 
 
-pub rcv_status_len(): l
-' Get the length of the receive status
-    return ( (readreg(core.RX_FIFO_INF) >> core.RXSUSED) & core.RXSUSED_BITS )
-
+pub fifo_set_wr_ptr(p)
+' Not supported by the hardware
 
 pub fifo_wr_ptr(): p
+' Not supported by the hardware
 
 
 con
@@ -138,6 +154,11 @@ pub flow_ctrl_lo_thresh(thr): c
         writereg(core.AFC_CFG, thr)
     else
         return ( (c >> core.AFC_LO) & core.AFC_LO_BITS) * 64
+
+
+pub get_frame(): s
+
+    s := rx_packet_len()
 
 
 pub get_node_address(p_addr)
@@ -295,6 +316,11 @@ pub mac_tx_enabled(e): c
             return ( ( (c >> core.TXEN) & 1) == 1)
 
 
+pub my_mac(): p
+
+    return @_mac_local
+
+
 pub node_address(p_addr) | byte ma[6]
 ' Set this node's MAC address
 '   p_addr: pointer to array containing 6-byte MAC address
@@ -323,18 +349,113 @@ pub phy_link_state(): s
     return (phy_readreg(core.PHY_BASIC_STATUS) >> core.LINK_STATE) & 1
 
 
+pub pkt_cnt(): c
+
+    return ( rcv_status_len() > 0 )
+
+
+con
+
+    ' RX status (use with rx_status() and last_rx_status() )
+    PKT_FILTER_BIT          = 31
+    FILTER_FAIL_BIT         = 30
+    RX_PKT_LEN_BITS         = 16'..29
+    ERROR_STATUS_BIT        = 15
+    ' b14 RESERVED
+    BCAST_FRAME_BIT         = 13
+    LEN_ERROR_BIT           = 12
+    RUNT_FRAME_BIT          = 11
+    MCAST_FRAME_BIT         = 10
+    FRAME_TOO_LONG_BIT      = 7
+    COLLISION_SEEN_BIT      = 6
+    FRAME_TYPE_BIT          = 5
+    RX_WD_TIMEOUT_BIT       = 4
+    MII_ERROR_BIT           = 3
+    DRIBBLING_BIT_BIT       = 2
+    CRC_ERROR_BIT           = 1
+
+    PKT_FILTER              = 1 << PKT_FILTER_BIT
+    FILTER_FAIL             = 1 << FILTER_FAIL_BIT
+    RX_PKT_LEN              = $3fff << RX_PKT_LEN_BITS
+    ERROR_STATUS            = 1 << ERROR_STATUS_BIT
+    BCAST_FRAME             = 1 << BCAST_FRAME_BIT
+    LEN_ERROR               = 1 << LEN_ERROR_BIT
+    RUNT_FRAME              = 1 << RUNT_FRAME_BIT
+    MCAST_FRAME             = 1 << MCAST_FRAME_BIT
+    FRAME_TOO_LONG          = 1 << FRAME_TOO_LONG_BIT
+    COLLISION_SEEN          = 1 << COLLISION_SEEN_BIT
+    FRAME_TYPE              = 1 << FRAME_TYPE_BIT
+        FT_ETH              = 1
+        FT_802_3            = 0
+    RX_WD_TIMEOUT           = 1 << RX_WD_TIMEOUT_BIT
+    MII_ERROR               = 1 << MII_ERROR_BIT
+    DRIBBLING_BIT           = 1 << DRIBBLING_BIT_BIT
+    CRC_ERROR               = 1 << CRC_ERROR_BIT
+
+
+pub rcv_status_len(): l
+' Get the length of the receive status
+    return ( (readreg(core.RX_FIFO_INF) >> core.RXSUSED) & core.RXSUSED_BITS )
+
+
+var
+
+    ' RX FIFO longword alignment cache
+    byte leftover[3]
+    byte leftover_len
+
+
 pub rd_block(p_dest, len)
 ' Read received data from the FIFO
 '   p_dest:     destination to copy the data to (pointer)
 '   len:        length of data to copy
+
+    ' The LAN9250 requires the total number of reads from the receive FIFO be in multiples of
+    '   4 (double-words) while the chip is selected.
+    ' To do this, we read the _requested_ number of bytes from the FIFO first, then read the
+    '   leftover quantity of bytes into a small buffer. The next time rd_block() is called,
+    '   it copies _those_ buffered bytes to the user first, _then_ reads additional data from
+    '   the chip.
+    ' Although not entirely clear, this is at least implied by the datasheet, page 124
+    '   "Change on Read Registers and FIFOs"
     pinl(_CS)
         spi.wr_byte(core.READ)
         spi.wrword_msbf(core.RX_DATA_FIFO)
-        spi.rdblock_lsbf(p_dest, len)
+        if ( leftover_len )
+            ' if there's any unaligned data to copy from a previous call,
+            '   copy it first
+            bytemove(p_dest, @leftover, leftover_len)
+            bytefill(@leftover, 0, 3)
+            len -= leftover_len                 ' account for leftover data in total requested
+
+        ' read from the ethernet RX FIFO
+        spi.rdblock_lsbf(p_dest+leftover_len, len)
+        leftover_len := 0
+
+        ' to keep reads long-aligned, cache remaining bytes in RAM for the next read
         if ( len // 4 )
-            repeat 4-(len//4)
-                spi.rd_byte()
+            leftover_len := 4-(len // 4)        ' how many more bytes to align to 4-bytes?
+            bytefill(@leftover, 0, 3)
+            spi.rdblock_lsbf(@leftover, leftover_len)
     pinh(_CS)
+
+
+pub rd_byte(): b
+
+    b := 0
+    rd_block(@b, 1)
+
+
+pub rd_long(): l
+
+    l := 0
+    rd_block(@l, 4)
+
+
+pub rd_word(): w
+
+    w := 0
+    rd_block(@w, 2)
 
 
 pub receive_own(f): c
@@ -352,42 +473,9 @@ pub receive_own(f): c
             return ( (c >> core.RCVOWN) & 1) == 0
 
 
-con
+pub last_rx_packet_len(): l
 
-    ' RX status (use with rx_status() and last_rx_status() )
-    PKT_FILTER_BIT          = 31
-    PKT_FILTER              = 1 << PKT_FILTER_BIT
-    FILTER_FAIL_BIT         = 30
-    FILTER_FAIL             = 1 << FILTER_FAIL_BIT
-    RX_PKT_LEN_BITS         = 16'..29
-    RX_PKT_LEN              = $3fff << RX_PKT_LEN_BITS
-    ERROR_STATUS_BIT        = 15
-    ERROR_STATUS            = 1 << ERROR_STATUS_BIT
-    ' b14 RESERVED
-    BCAST_FRAME_BIT         = 13
-    BCAST_FRAME             = 1 << BCAST_FRAME_BIT
-    LEN_ERROR_BIT           = 12
-    LEN_ERROR               = 1 << LEN_ERROR_BIT
-    RUNT_FRAME_BIT          = 11
-    RUNT_FRAME              = 1 << RUNT_FRAME_BIT
-    MCAST_FRAME_BIT         = 10
-    MCAST_FRAME             = 1 << MCAST_FRAME_BIT
-    FRAME_TOO_LONG_BIT      = 7
-    FRAME_TOO_LONG          = 1 << FRAME_TOO_LONG_BIT
-    COLLISION_SEEN_BIT      = 6
-    COLLISION_SEEN          = 1 << COLLISION_SEEN_BIT
-    FRAME_TYPE_BIT          = 5
-    FRAME_TYPE              = 1 << FRAME_TYPE_BIT
-        FT_ETH              = 1
-        FT_802_3            = 0
-    RX_WD_TIMEOUT_BIT       = 4
-    RX_WD_TIMEOUT           = 1 << RX_WD_TIMEOUT_BIT
-    MII_ERROR_BIT           = 3
-    MII_ERROR               = 1 << MII_ERROR_BIT
-    DRIBBLING_BIT_BIT       = 2
-    DRIBBLING_BIT           = 1 << DRIBBLING_BIT_BIT
-    CRC_ERROR_BIT           = 1 
-    CRC_ERROR               = 1 << CRC_ERROR_BIT
+    return (_rcv_status & RX_PKT_LEN_BITS) & $3fff
 
 
 pub rx_packet_len(): l
@@ -423,6 +511,7 @@ pub last_rx_status(): s
 pub rx_status(): s
 ' Get the last received packet status
     _rcv_status := readreg(core.RX_STATUS_FIFO)
+    DEBUG("lan9250: rx_status(): ", ubin_(_rcv_status) )
     return _rcv_status
 
 
@@ -449,25 +538,26 @@ pub set_txfifo_size(s)
     writereg(core.HW_CFG, core.MBO | ( (s/1024) << core.TX_FIF_SZ) )
 
 
-pub send_frame(len, offs=0)'xxx give TX cmd A+B defaults, but make them configurable
+pub send_frame(len=0, offs=0)'xxx give TX cmd A+B defaults, but make them configurable
 ' Send an ethernet frame
 '   len:    frame length, in bytes
 '   offs:   offset within FIFO where frame lies (optional; default is 0 if unspecified)
-    _frame_start_ptr := fifo_wr_ptr()           ' remember current FIFO wr position for later
+'    _frame_start_ptr := fifo_wr_ptr()           ' remember current FIFO wr position for later
 
     ' write TX command 'A': interrupt on completion, align buffer end, set offset,
     '   mark this as first segment, mark this as last segment
-    writereg(   core.TX_DATA_FIFO, ...
-                core.CMD_A_INT_ON_COMP | ...
-                core.CMD_A_ALIGN_16B | ...
-                (offs << core.DSTART_OFFS) | ...
-                core.CMD_A_FS | ...
-                core.CMD_A_LS | ...
-                len)
+'    writereg(   core.TX_DATA_FIFO, ...
+'                core.CMD_A_INT_ON_COMP | ...
+'                core.CMD_A_ALIGN_16B | ...
+'                (offs << core.DSTART_OFFS) | ...
+'                core.CMD_A_FS | ...
+'                core.CMD_A_LS | ...
+'                len)
 
     ' write TX command 'B'
-    writereg(   core.TX_DATA_FIFO, core.CMD_B_PACKET_TAG | len)
+'    writereg(   core.TX_DATA_FIFO, core.CMD_B_PACKET_TAG | len)
 '    writereg(   core.TX_DATA_FIFO, 0)
+    'tx_ena(true)
 
 
 pub start_frame(len=0)
