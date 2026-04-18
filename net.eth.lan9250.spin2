@@ -405,39 +405,50 @@ var
     byte leftover_len
 
 
-pub rd_block(p_dest, len)
+pub rd_block(p_dest, len) | remaining, left_used, buf_rdlen
 ' Read received data from the FIFO
 '   p_dest:     destination to copy the data to (pointer)
 '   len:        length of data to copy
 
-    ' The LAN9250 requires the total number of reads from the receive FIFO be in multiples of
-    '   4 (double-words) while the chip is selected.
-    ' To do this, we read the _requested_ number of bytes from the FIFO first, then read the
-    '   leftover quantity of bytes into a small buffer. The next time rd_block() is called,
-    '   it copies _those_ buffered bytes to the user first, _then_ reads additional data from
-    '   the chip.
+    ' Reads from the LAN9250's RX FIFO must be done in complete 32-bit units.
+    ' To be able to read any arbitrary quantity and adhere to this, we read the _requested_
+    '   number of bytes from the FIFO first, then read the leftover quantity of bytes into
+    '   a small buffer. The next time rd_block() is called, it copies _those_ buffered bytes
+    '   to the user first, _then_ reads additional data from the chip, as needed.
     ' Although not entirely clear, this is at least implied by the datasheet, page 124
     '   "Change on Read Registers and FIFOs"
-    pinl(_CS)
-        spi.wr_byte(core.READ)
-        spi.wrword_msbf(core.RX_DATA_FIFO)
-        if ( leftover_len )
-            ' if there's any unaligned data to copy from a previous call,
-            '   copy it first
-            bytemove(p_dest, @leftover, leftover_len)
-            bytefill(@leftover, 0, 3)
-            len -= leftover_len                 ' account for leftover data in total requested
+    remaining := len
+    if ( remaining <= 0 )
+        return
 
-        ' read from the ethernet RX FIFO
-        spi.rdblock_lsbf(p_dest+leftover_len, len)
-        leftover_len := 0
+    if ( leftover_len )
+        ' if there's any unaligned data to copy from a previous call, copy it first:
+        buf_rdlen := len
+        if ( buf_rdlen > leftover_len )
+            buf_rdlen := leftover_len
+        bytemove(p_dest, @leftover, buf_rdlen)
+        remaining := leftover_len - buf_rdlen
+        if ( remaining )
+            ' shift the data still left down to the start of the buffer
+            bytemove(@leftover, @leftover+buf_rdlen, remaining)
+        bytefill(@leftover+remaining, 0, 3-remaining)
+        leftover_len := remaining
+        p_dest += buf_rdlen
+        len -= buf_rdlen
 
-        ' to keep reads long-aligned, cache remaining bytes in RAM for the next read
-        if ( len // 4 )
-            leftover_len := 4-(len // 4)        ' how many more bytes to align to 4-bytes?
-            bytefill(@leftover, 0, 3)
-            spi.rdblock_lsbf(@leftover, leftover_len)
-    pinh(_CS)
+    if ( len )
+        ' read the rest from the ethernet RX FIFO
+        pinl(_CS)
+            spi.wr_byte(core.READ)
+            spi.wrword_msbf(core.RX_DATA_FIFO)
+            spi.rdblock_lsbf(p_dest+leftover_len, len)
+
+            ' to keep reads long-aligned, cache remaining bytes in RAM for the next read
+            if ( len // 4 )
+                leftover_len := 4-(len // 4)  ' how many more bytes to align to 4-bytes?
+                bytefill(@leftover, 0, 3)
+                spi.rdblock_lsbf(@leftover, leftover_len)
+        pinh(_CS)
 
 
 pub rd_byte(): b
