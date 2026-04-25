@@ -4,7 +4,7 @@
     Description:    LAN9250-specific constants
     Author:         Jesse Burt
     Started:        Jul 27, 2025
-    Updated:        Apr 14, 2026
+    Updated:        Apr 25, 2026
     Copyright (c) 2026 - See end of file for terms of use.
 ----------------------------------------------------------------------------------------------------
 }
@@ -194,8 +194,8 @@ con
 
     RX_DP_CTRL          = $078
     RX_DP_CTRL_MASK     = $8000_0000
-        RX_FFWD         = 31                    ' R/W, SC
-
+        RX_FFWD_BIT     = 31                    ' R/W, SC
+        RX_FFWD         = (1 << RX_FFWD_BIT)
 
     RX_FIFO_INF         = $07c
     RX_FIFO_INF_MASK    = $00ff_ffff

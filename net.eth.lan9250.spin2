@@ -4,7 +4,7 @@
     Description:    Driver for the LAN9250 Ethernet Transceiver
     Author:         Jesse Burt
     Started:        Jul 27, 2025
-    Updated:        Apr 18, 2026
+    Updated:        Apr 25, 2026
     Copyright (c) 2026 - See end of file for terms of use.
 ----------------------------------------------------------------------------------------------------
 }
@@ -37,9 +37,8 @@ obj
 
 var
 
-    long _frame_start_ptr
-    long _rcv_status
-    byte _rcv_status_len
+    long _rx_status
+    byte _rx_status_len
 
     byte _mac_local[6]
 
@@ -101,21 +100,25 @@ pub dev_ready(): f
 
 pub fifo_rd_ptr(): p
 ' Not supported by the hardware
+' Defined for net.eth API compatibility only
 
 
 pub fifo_rx_bytes(): b
 ' Get the number of bytes received in the FIFO
     b := readreg(core.RX_FIFO_INF)
-    _rcv_status_len := ( (b >> core.RXSUSED) & core.RXSUSED_BITS )
+    _rx_status_len := ( (b >> core.RXSUSED) & core.RXSUSED_BITS )
 
     return (b & core.RXDUSED_BITS)
 
 
 pub fifo_set_wr_ptr(p)
 ' Not supported by the hardware
+' Defined for net.eth API compatibility only
+
 
 pub fifo_wr_ptr(): p
 ' Not supported by the hardware
+' Defined for net.eth API compatibility only
 
 
 con
@@ -157,15 +160,21 @@ pub flow_ctrl_lo_thresh(thr): c
 
 
 pub get_frame(): s
-
+' Receive frame from ethernet device
+'   Returns: number of bytes received (includes padding, FCS)
     s := rx_packet_len()
 
 
-pub get_node_address(p_addr)
+pub my_mac = get_node_address
+pub get_node_address(p_addr=0): p
 ' Get this node's MAC address
-'   p_addr: pointer to 6-byte array to copy MAC address to
-    long[p_addr] := mac_readreg(core.HMAC_ADDRL)
-    word[p_addr+4] := (mac_readreg(core.HMAC_ADDRH) & core.HMAC_ADDRH_MASK)
+    long[@_mac_local] := mac_readreg(core.HMAC_ADDRL)
+    word[@_mac_local+4] := mac_readreg(core.HMAC_ADDRH) & core.HMAC_ADDRH_MASK
+
+    if ( p_addr )
+        bytemove(p_addr, @_mac_local, 6)
+
+    return @_mac_local
 
 
 pub hash_perfect_filter_mode(m): c
@@ -222,29 +231,29 @@ con
 
     ' Interrupt flags                                                               can clear with
     ' Interrupt event symbols                   Description                         int_clear()
-    SW_INT_EN       = 1 << core.SW_INT_EN       ' software interrupt                Y
-    READY_EN        = 1 << core.READY_EN        ' device ready                      Y
-    EVNT_1588_EN    = 1 << core.EVNT_1588_EN    ' 1588 interrupt event              N
-    PHY_INT_EN      = 1 << core.PHY_INT_EN      ' PHY interrupt event               N
-    TXSTOP_INT_EN   = 1 << core.TXSTOP_INT_EN   ' TX stopped                        Y
-    RXSTOP_INT_EN   = 1 << core.RXSTOP_INT_EN   ' RX stopped                        Y
-    RXDFH_INT_EN    = 1 << core.RXDFH_INT_EN    ' RX dropped frame counter halfway  Y
-    TIOC_INT_EN     = 1 << core.TIOC_INT_EN     ' TX IOC                            Y
-    RXD_INT_EN      = 1 << core.RXDF_INT_EN     ' RX DMA                            Y
-    GPT_INT_EN      = 1 << core.GPT_INT_EN      ' GP timer                          Y
-    PME_INT_EN      = 1 << core.PME_INT_EN      ' power management                  Y
-    TXSO_EN         = 1 << core.TXSO_EN         ' TX status FIFO overflow           Y
-    RWT_INT_EN      = 1 << core.RWT_INT_EN      ' RX watchdog timeout               Y
-    RXE_INT_EN      = 1 << core.RXE_INT_EN      ' RX error                          Y
-    TXE_INT_EN      = 1 << core.TXE_INT_EN      ' TX error                          Y
-    GPIO_EN         = 1 << core.GPIO_EN         ' GPIO                              N
-    TDFO_EN         = 1 << core.TDFO_EN         ' TX data FIFO overrun              Y
-    TDFA_EN         = 1 << core.TDFA_EN         ' TX data FIFO available            Y
-    TSFF_EN         = 1 << core.TSFF_EN         ' TX status FIFO full               Y
-    TSFL_EN         = 1 << core.TSFL_EN         ' TX status FIFO level              Y
-    RXDF_INT_EN     = 1 << core.RXDF_INT_EN     ' RX dropped frame                  Y
-    RSSFF_EN        = 1 << core.RSSFF_EN        ' RX status FIFO full               Y
-    RSFL_EN         = 1 << core.RSFL_EN         ' RX status FIFO level              Y
+    SW_INT_EN       = 1 << 31                   ' software interrupt                Y
+    READY_EN        = 1 << 30                   ' device ready                      Y
+    EVNT_1588_EN    = 1 << 29                   ' 1588 interrupt event              N
+    PHY_INT_EN      = 1 << 26                   ' PHY interrupt event               N
+    TXSTOP_INT_EN   = 1 << 25                   ' TX stopped                        Y
+    RXSTOP_INT_EN   = 1 << 24                   ' RX stopped                        Y
+    RXDFH_INT_EN    = 1 << 23                   ' RX dropped frame counter halfway  Y
+    TIOC_INT_EN     = 1 << 21                   ' TX IOC                            Y
+    RXD_INT_EN      = 1 << 20                   ' RX DMA                            Y
+    GPT_INT_EN      = 1 << 19                   ' GP timer                          Y
+    PME_INT_EN      = 1 << 17                   ' power management                  Y
+    TXSO_EN         = 1 << 16                   ' TX status FIFO overflow           Y
+    RWT_INT_EN      = 1 << 15                   ' RX watchdog timeout               Y
+    RXE_INT_EN      = 1 << 14                   ' RX error                          Y
+    TXE_INT_EN      = 1 << 13                   ' TX error                          Y
+    GPIO_EN         = 1 << 12                   ' GPIO                              N
+    TDFO_EN         = 1 << 10                   ' TX data FIFO overrun              Y
+    TDFA_EN         = 1 << 9                    ' TX data FIFO available            Y
+    TSFF_EN         = 1 << 8                    ' TX status FIFO full               Y
+    TSFL_EN         = 1 << 7                    ' TX status FIFO level              Y
+    RXDF_INT_EN     = 1 << 6                    ' RX dropped frame                  Y
+    RSSFF_EN        = 1 << 4                    ' RX status FIFO full               Y
+    RSFL_EN         = 1 << 3                    ' RX status FIFO level              Y
 
 pub int_mask(): m
 ' Get currently set interrupt mask
@@ -294,6 +303,26 @@ pub interrupt(): i
     return readreg(core.INT_STS) & core.INT_STS_MASK
 
 
+pub last_rx_packet_len(): l
+' Get the length of the last (cached) received packet
+    return (_rx_status >> RX_PKT_LEN_BITS) & $3fff
+
+
+pub last_rx_address_filter_failed(): s
+' Check if the last (cached) received packet failed RX address filtering
+    return _rx_status & FILTER_FAIL
+
+
+pub last_rx_passed_filter(): s
+' Check if the last (cached) received packet passed filtering
+    return _rx_status & PKT_FILTER
+
+
+pub last_rx_status(): s
+' Get the last (cached) received packet status
+    return _rx_status
+
+
 pub mac_rx_enabled(e): c
 ' Enable host MAC receiver
     c := mac_readreg(core.HMAC_CR)
@@ -314,11 +343,6 @@ pub mac_tx_enabled(e): c
             mac_writereg(core.HMAC_CR, e)
         other:
             return ( ( (c >> core.TXEN) & 1) == 1)
-
-
-pub my_mac(): p
-
-    return @_mac_local
 
 
 pub node_address(p_addr) | byte ma[6]
@@ -351,7 +375,7 @@ pub phy_link_state(): s
 
 pub pkt_cnt(): c
 
-    return ( rcv_status_len() > 0 )
+    return ( rx_status_len() > 0 )
 
 
 con
@@ -393,11 +417,6 @@ con
     CRC_ERROR               = 1 << CRC_ERROR_BIT
 
 
-pub rcv_status_len(): l
-' Get the length of the receive status
-    return ( (readreg(core.RX_FIFO_INF) >> core.RXSUSED) & core.RXSUSED_BITS )
-
-
 var
 
     ' RX FIFO longword alignment cache
@@ -405,7 +424,7 @@ var
     byte leftover_len
 
 
-pub rd_block(p_dest, len) | remaining, left_used, buf_rdlen
+pub rd_block(p_dest, len) | remaining, buf_rdlen
 ' Read received data from the FIFO
 '   p_dest:     destination to copy the data to (pointer)
 '   len:        length of data to copy
@@ -423,9 +442,11 @@ pub rd_block(p_dest, len) | remaining, left_used, buf_rdlen
 
     if ( leftover_len )
         ' if there's any unaligned data to copy from a previous call, copy it first:
+        DEBUG("lan9250: rd_block(): ", udec_(leftover_len), " bytes cached")
         buf_rdlen := len
         if ( buf_rdlen > leftover_len )
             buf_rdlen := leftover_len
+        DEBUG("lan9250: rd_block(): leftover: ", uhex_byte_array_(@leftover, leftover_len) )
         bytemove(p_dest, @leftover, buf_rdlen)
         remaining := leftover_len - buf_rdlen
         if ( remaining )
@@ -437,34 +458,38 @@ pub rd_block(p_dest, len) | remaining, left_used, buf_rdlen
         len -= buf_rdlen
 
     if ( len )
+        DEBUG("lan9250: rd_block(): still need ", udec_(len), " bytes")
         ' read the rest from the ethernet RX FIFO
         pinl(_CS)
             spi.wr_byte(core.READ)
             spi.wrword_msbf(core.RX_DATA_FIFO)
-            spi.rdblock_lsbf(p_dest+leftover_len, len)
+            spi.rdblock_lsbf(p_dest+leftover_len, len)  'xxx verify +leftover_len offset is correct
 
             ' to keep reads long-aligned, cache remaining bytes in RAM for the next read
-            if ( len // 4 )
-                leftover_len := 4-(len // 4)  ' how many more bytes to align to 4-bytes?
+            remaining := len // 4
+            if ( remaining)
+                leftover_len := 4-remaining     ' how many more bytes to align to 4-bytes?
+                DEBUG("lan9250: rd_block(): read into leftover cache: ", udec_(leftover_len) )
                 bytefill(@leftover, 0, 3)
                 spi.rdblock_lsbf(@leftover, leftover_len)
         pinh(_CS)
+    DEBUG("lan9250: ret")
 
 
 pub rd_byte(): b
-
+' Read a byte from the RX FIFO
     b := 0
     rd_block(@b, 1)
 
 
 pub rd_long(): l
-
+' Read a long from the RX FIFO
     l := 0
     rd_block(@l, 4)
 
 
 pub rd_word(): w
-
+' Read a word from the RX FIFO
     w := 0
     rd_block(@w, 2)
 
@@ -484,19 +509,11 @@ pub receive_own(f): c
             return ( (c >> core.RCVOWN) & 1) == 0
 
 
-pub last_rx_packet_len(): l
-
-    return (_rcv_status & RX_PKT_LEN_BITS) & $3fff
-
-
-pub rx_packet_len(): l
-' Get the length of the most recently received packet
-    return (rx_status() >> RX_PKT_LEN_BITS) & $3fff
-
-
-pub last_rx_address_filter_failed(): s
-' Check if the last (cached) received packet failed RX address filtering
-    return _rcv_status & FILTER_FAIL
+pub rx_leftover_flush()
+' Flush the receive leftover bytes buffer (use after finished reading frame with rd_block() )
+    bytefill(@leftover, 0, 3)
+    leftover_len := 0
+    DEBUG("lan9250: flush leftover cache")
 
 
 pub rx_address_filter_failed(): s
@@ -504,9 +521,9 @@ pub rx_address_filter_failed(): s
     return rx_status() & FILTER_FAIL
 
 
-pub last_rx_passed_filter(): s
-' Check if the last (cached) received packet passed filtering
-    return _rcv_status & PKT_FILTER
+pub rx_packet_len(): l
+' Get the length of the most recently received packet
+    return (rx_status() >> RX_PKT_LEN_BITS) & $3fff
 
 
 pub rx_passed_filter(): s
@@ -514,16 +531,47 @@ pub rx_passed_filter(): s
     return rx_status() & PKT_FILTER
 
 
-pub last_rx_status(): s
-' Get the last (cached) received packet status
-    return _rcv_status
+pub rx_skip_padding()
+' Skip padding and FCS in the currently received frame (fast-forward to the next frame)
+    DEBUG("lan9250: rx_skip_padding()")
+    writereg(core.RX_DP_CTRL, core.RX_FFWD)
+
+    ' wait for bit to clear
+    repeat
+    while readreg(core.RX_DP_CTRL) & core.RX_FFWD
 
 
 pub rx_status(): s
 ' Get the last received packet status
-    _rcv_status := readreg(core.RX_STATUS_FIFO)
-    DEBUG("lan9250: rx_status(): ", ubin_(_rcv_status) )
-    return _rcv_status
+    _rx_status := readreg(core.RX_STATUS_FIFO) ' cache this status in RAM (for last_*() methods)
+    DEBUG("lan9250: rx_status(): ", ubin_(_rx_status) )
+    return _rx_status
+
+
+pub rx_status_len(): l
+' Get the length of the receive status
+    return ( (readreg(core.RX_FIFO_INF) >> core.RXSUSED) & core.RXSUSED_BITS )
+
+
+pub send_frame(len=0, offs=0)'xxx give TX cmd A+B defaults, but make them configurable
+' Send an ethernet frame
+'   len:    frame length, in bytes
+'   offs:   offset within FIFO where frame lies (optional; default is 0 if unspecified)
+
+    ' write TX command 'A': interrupt on completion, align buffer end, set offset,
+    '   mark this as first segment, mark this as last segment
+'    writereg(   core.TX_DATA_FIFO, ...
+'                core.CMD_A_INT_ON_COMP | ...
+'                core.CMD_A_ALIGN_16B | ...
+'                (offs << core.DSTART_OFFS) | ...
+'                core.CMD_A_FS | ...
+'                core.CMD_A_LS | ...
+'                len)
+
+    ' write TX command 'B'
+'    writereg(   core.TX_DATA_FIFO, core.CMD_B_PACKET_TAG | len)
+'    writereg(   core.TX_DATA_FIFO, 0)
+    'tx_ena(true)
 
 
 pub set_phy_address(a) | tmp
@@ -549,28 +597,6 @@ pub set_txfifo_size(s)
     writereg(core.HW_CFG, core.MBO | ( (s/1024) << core.TX_FIF_SZ) )
 
 
-pub send_frame(len=0, offs=0)'xxx give TX cmd A+B defaults, but make them configurable
-' Send an ethernet frame
-'   len:    frame length, in bytes
-'   offs:   offset within FIFO where frame lies (optional; default is 0 if unspecified)
-'    _frame_start_ptr := fifo_wr_ptr()           ' remember current FIFO wr position for later
-
-    ' write TX command 'A': interrupt on completion, align buffer end, set offset,
-    '   mark this as first segment, mark this as last segment
-'    writereg(   core.TX_DATA_FIFO, ...
-'                core.CMD_A_INT_ON_COMP | ...
-'                core.CMD_A_ALIGN_16B | ...
-'                (offs << core.DSTART_OFFS) | ...
-'                core.CMD_A_FS | ...
-'                core.CMD_A_LS | ...
-'                len)
-
-    ' write TX command 'B'
-'    writereg(   core.TX_DATA_FIFO, core.CMD_B_PACKET_TAG | len)
-'    writereg(   core.TX_DATA_FIFO, 0)
-    'tx_ena(true)
-
-
 pub start_frame(len=0)
 ' Start a new Ethernet frame
     wr_long(core.CMD_A_FS | core.CMD_A_LS | len)
@@ -593,12 +619,12 @@ pub tx_fifo_free(): b
     return readreg(core.TX_FIFO_INF) & core.TXFREE_BITS
 
 
-pub txfifo_size(): s
+pub tx_fifo_size(): s
 ' Get the currently configured size of the transmit FIFO
     return ( ( (readreg(core.HW_CFG) >> core.TX_FIF_SZ) & core.TX_FIF_SZ_BITS) * 1024) - 512
 
 
-pub wr_block(p_src, len)
+pub wr_block(p_src, len) | r
 ' Write data to the transmit FIFO
 '   p_src:      source to copy data from (pointer)
 '   len:        length of data to write
@@ -606,8 +632,9 @@ pub wr_block(p_src, len)
         spi.wr_byte(core.WRITE)
         spi.wrword_msbf(core.TX_DATA_FIFO)
         spi.wrblock_lsbf(p_src, len)
-        if ( len // 4 )                         ' make sure data is long-aligned:
-            spi.wr_bytex($00, 4-(len//4) )      '   pad with zero(es) if not
+        r := len // 4
+        if ( r )                                ' make sure data is long-aligned:
+            spi.wr_bytex($00, 4-r )             '   pad with zero(es) if not
     pinh(_CS)
 
 
