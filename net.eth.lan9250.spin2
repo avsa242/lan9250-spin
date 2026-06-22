@@ -4,7 +4,7 @@
     Description:    Driver for the LAN9250 Ethernet Transceiver
     Author:         Jesse Burt
     Started:        Jul 27, 2025
-    Updated:        Apr 25, 2026
+    Updated:        Jun 22, 2026
     Copyright (c) 2026 - See end of file for terms of use.
 ----------------------------------------------------------------------------------------------------
 }
@@ -79,6 +79,7 @@ pub preset()'xxx
     writereg(core.RX_CFG, 0)
     mac_rx_enabled(true)
 
+    ignore_txstatus_overrun(true)
     mac_writereg(core.HMAC_CR, (1 << core.FDPX) | (1 << core.PADSTR) | core.MAC_TX_ENA | core.MAC_RX_ENA)
     tx_ena(true)
 
@@ -624,17 +625,19 @@ pub tx_fifo_size(): s
     return ( ( (readreg(core.HW_CFG) >> core.TX_FIF_SZ) & core.TX_FIF_SZ_BITS) * 1024) - 512
 
 
-pub wr_block(p_src, len) | r
+pub wr_block(p_src, len) | r, byte cmd[3]
 ' Write data to the transmit FIFO
 '   p_src:      source to copy data from (pointer)
 '   len:        length of data to write
+    cmd[0] := core.WRITE
+    cmd[1] := core.TX_DATA_FIFO >> 8
+    cmd[2] := core.TX_DATA_FIFO & $ff
     pinl(_CS)
-        spi.wr_byte(core.WRITE)
-        spi.wrword_msbf(core.TX_DATA_FIFO)
+        spi.wrblock_lsbf(@cmd, 3)
         spi.wrblock_lsbf(p_src, len)
         r := len // 4
         if ( r )                                ' make sure data is long-aligned:
-            spi.wr_bytex($00, 4-r )             '   pad with zero(es) if not
+            spi.wr_bytex($00, 4-r)              '   pad with zero(es) if not
     pinh(_CS)
 
 
