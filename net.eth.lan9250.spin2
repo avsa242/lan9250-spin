@@ -102,6 +102,7 @@ pub dev_ready(): f
 pub fifo_rd_ptr(): p
 ' Not supported by the hardware
 ' Defined for net.eth API compatibility only
+    return 0
 
 
 pub fifo_rx_bytes(): b
@@ -120,6 +121,7 @@ pub fifo_set_wr_ptr(p)
 pub fifo_wr_ptr(): p
 ' Not supported by the hardware
 ' Defined for net.eth API compatibility only
+    return 0
 
 
 con
