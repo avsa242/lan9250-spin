@@ -4,7 +4,7 @@
     Description:    Driver for the LAN9250 Ethernet Transceiver
     Author:         Jesse Burt
     Started:        Jul 27, 2025
-    Updated:        Jun 22, 2026
+    Updated:        Jul 1, 2026
     Copyright (c) 2026 - See end of file for terms of use.
 ----------------------------------------------------------------------------------------------------
 }
@@ -28,6 +28,8 @@ con
 
     PF_PROMISCUOUS  = 1 << core.PRMS
 
+    RXBUFFSZ        = 1700
+
 
 obj
 
@@ -38,10 +40,12 @@ obj
 var
 
     long _rx_status
+
+    word _rcv_len, _rcv_rd_ptr
+
+    byte _rcv_frame[RXBUFFSZ]
     byte _rx_status_len
-
     byte _mac_local[6]
-
     byte _CS
 
 
@@ -162,10 +166,32 @@ pub flow_ctrl_lo_thresh(thr): c
         return ( (c >> core.AFC_LO) & core.AFC_LO_BITS) * 64
 
 
-pub get_frame(): s
+pub get_frame(): l | alen
 ' Receive frame from ethernet device
 '   Returns: number of bytes received (includes padding, FCS)
-    s := rx_packet_len()
+    l := rx_packet_len()
+
+    int_set_mask(0)                             ' disable interrupts while reading
+
+    'readreg(core.RX_DATA_FIFO) 'use when 4-byte offset is enabled
+    bytefill(@_rcv_frame, 0, RXBUFFSZ)
+    _rcv_len := 0
+    _rcv_rd_ptr := 0
+
+    pinl(_CS)
+        spi.wr_byte(core.READ)
+        spi.wrword_msbf(core.RX_DATA_FIFO)
+        spi.rdblock_lsbf(@_rcv_frame, l)
+        if ( l > 64 )
+            if ( l // 4 )
+            ' read more bytes as necessary to keep 32-bit read alignment
+                alen := 4-(l // 4)
+                spi.rdblock_lsbf(@_rcv_frame+l, alen)
+                _rcv_len += alen
+    pinh(_CS)
+    _rcv_len := l
+
+    int_set_mask(SW_INT_EN | RXSTOP_INT_EN | RXE_INT_EN | TDFA_EN | RSFL_EN | PHY_INT_EN)
 
 
 pub my_mac = get_node_address
@@ -420,63 +446,13 @@ con
     CRC_ERROR               = 1 << CRC_ERROR_BIT
 
 
-var
-
-    ' RX FIFO longword alignment cache
-    byte leftover[3]
-    byte leftover_len
-
-
-pub rd_block(p_dest, len) | remaining, buf_rdlen
+pub rd_block(p_dest, len) | remaining, buf_rdlen, l, hte
 ' Read received data from the FIFO
 '   p_dest:     destination to copy the data to (pointer)
 '   len:        length of data to copy
-
-    ' Reads from the LAN9250's RX FIFO must be done in complete 32-bit units.
-    ' To be able to read any arbitrary quantity and adhere to this, we read the _requested_
-    '   number of bytes from the FIFO first, then read the leftover quantity of bytes into
-    '   a small buffer. The next time rd_block() is called, it copies _those_ buffered bytes
-    '   to the user first, _then_ reads additional data from the chip, as needed.
-    ' Although not entirely clear, this is at least implied by the datasheet, page 124
-    '   "Change on Read Registers and FIFOs"
-    remaining := len
-    if ( remaining <= 0 )
-        return
-
-    if ( leftover_len )
-        ' if there's any unaligned data to copy from a previous call, copy it first:
-        DEBUG("lan9250: rd_block(): ", udec_(leftover_len), " bytes cached")
-        buf_rdlen := len
-        if ( buf_rdlen > leftover_len )
-            buf_rdlen := leftover_len
-        DEBUG("lan9250: rd_block(): leftover: ", uhex_byte_array_(@leftover, leftover_len) )
-        bytemove(p_dest, @leftover, buf_rdlen)
-        remaining := leftover_len - buf_rdlen
-        if ( remaining )
-            ' shift the data still left down to the start of the buffer
-            bytemove(@leftover, @leftover+buf_rdlen, remaining)
-        bytefill(@leftover+remaining, 0, 3-remaining)
-        leftover_len := remaining
-        p_dest += buf_rdlen
-        len -= buf_rdlen
-
-    if ( len )
-        DEBUG("lan9250: rd_block(): still need ", udec_(len), " bytes")
-        ' read the rest from the ethernet RX FIFO
-        pinl(_CS)
-            spi.wr_byte(core.READ)
-            spi.wrword_msbf(core.RX_DATA_FIFO)
-            spi.rdblock_lsbf(p_dest+leftover_len, len)  'xxx verify +leftover_len offset is correct
-
-            ' to keep reads long-aligned, cache remaining bytes in RAM for the next read
-            remaining := len // 4
-            if ( remaining)
-                leftover_len := 4-remaining     ' how many more bytes to align to 4-bytes?
-                DEBUG("lan9250: rd_block(): read into leftover cache: ", udec_(leftover_len) )
-                bytefill(@leftover, 0, 3)
-                spi.rdblock_lsbf(@leftover, leftover_len)
-        pinh(_CS)
-    DEBUG("lan9250: ret")
+    if ( _rcv_len )
+        bytemove(p_dest, @_rcv_frame+_rcv_rd_ptr, len <# _rcv_len)
+        _rcv_rd_ptr += len
 
 
 pub rd_byte(): b
@@ -512,13 +488,6 @@ pub receive_own(f): c
             return ( (c >> core.RCVOWN) & 1) == 0
 
 
-pub rx_leftover_flush()
-' Flush the receive leftover bytes buffer (use after finished reading frame with rd_block() )
-    bytefill(@leftover, 0, 3)
-    leftover_len := 0
-    DEBUG("lan9250: flush leftover cache")
-
-
 pub rx_address_filter_failed(): s
 ' Check if the last received packet failed RX address filtering
     return rx_status() & FILTER_FAIL
@@ -536,7 +505,7 @@ pub rx_passed_filter(): s
 
 pub rx_skip_padding()
 ' Skip padding and FCS in the currently received frame (fast-forward to the next frame)
-    DEBUG("lan9250: rx_skip_padding()")
+    'DEBUG("lan9250: rx_skip_padding()")
     writereg(core.RX_DP_CTRL, core.RX_FFWD)
 
     ' wait for bit to clear
@@ -547,7 +516,7 @@ pub rx_skip_padding()
 pub rx_status(): s
 ' Get the last received packet status
     _rx_status := readreg(core.RX_STATUS_FIFO) ' cache this status in RAM (for last_*() methods)
-    DEBUG("lan9250: rx_status(): ", ubin_(_rx_status) )
+    'DEBUG("lan9250: rx_status(): ", ubin_(_rx_status) )
     return _rx_status
 
 
