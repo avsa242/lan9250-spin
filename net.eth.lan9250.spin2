@@ -87,6 +87,14 @@ pub preset()'xxx
     mac_writereg(core.HMAC_CR, (1 << core.FDPX) | (1 << core.PADSTR) | core.MAC_TX_ENA | core.MAC_RX_ENA)
     tx_ena(true)
 
+    ' PHY setup
+    phy_writereg(core.PHY_BASIC_CONTROL, $2000 | $1000 | $100)
+    phy_writereg(core.PHY_AN_ADV, $0800 | $0400 | $0100 | $0080 | $0040 | $0020 | 1)
+    phy_writereg(core.PHY_SPECIAL_MODES, $00e0 | $0001)
+    phy_writereg(core.PHY_SPECIAL_CTRL_STAT_IND, $8000 | $4000 | $0800)
+    phy_writereg(core.PHY_INT_MASK, $0200 | $0080 | $0010)
+    phy_writereg(core.PHY_SPECIAL_CTRL_STATUS, $0040)
+
 
 pub dev_id(): i
 ' Read the device ID and revision
