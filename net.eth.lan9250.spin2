@@ -4,7 +4,7 @@
     Description:    Driver for the LAN9250 Ethernet Transceiver
     Author:         Jesse Burt
     Started:        Jul 27, 2025
-    Updated:        Jul 1, 2026
+    Updated:        Jul 2, 2026
     Copyright (c) 2026 - See end of file for terms of use.
 ----------------------------------------------------------------------------------------------------
 }
@@ -88,12 +88,17 @@ pub preset()'xxx
     tx_ena(true)
 
     ' PHY setup
-    phy_writereg(core.PHY_BASIC_CONTROL, $2000 | $1000 | $100)
-    phy_writereg(core.PHY_AN_ADV, $0800 | $0400 | $0100 | $0080 | $0040 | $0020 | 1)
-    phy_writereg(core.PHY_SPECIAL_MODES, $00e0 | $0001)
-    phy_writereg(core.PHY_SPECIAL_CTRL_STAT_IND, $8000 | $4000 | $0800)
-    phy_writereg(core.PHY_INT_MASK, $0200 | $0080 | $0010)
-    phy_writereg(core.PHY_SPECIAL_CTRL_STATUS, $0040)
+    phy_autoneg_enabled(true)
+    phy_full_duplex_enabled(true)
+    phy_speed(100)
+    phy_autoneg_advertise_mask(PHYAN_ASYMM_PAUSE | PHYAN_SYMM_PAUSE | PHYAN_100BASEX_FDPX | ...
+                                PHYAN_100BASEX_HDPX | PHYAN_10BASEX_FDPX | PHYAN_10BASEX_HDPX)
+    phy_mode(PHYMD_ALL_CAPABLE)
+    phy_automdix_control(PHYAM_OVERRIDE)
+    phy_automdix_mode(PHYAM_AUTO)
+    phy_sqe_test_enabled(false)
+    phy_int_set_mask(PHY_INT_LINK_UP | PHY_INT_ENERGY_ON | PHY_INT_LINK_DOWN)
+    phy_writereg(core.PHY_SPECIAL_CTRL_STATUS, core.PHY_SPECIAL_RESERVED)
 
 
 pub dev_id(): i
@@ -360,6 +365,20 @@ pub last_rx_status(): s
     return _rx_status
 
 
+pub mac_full_duplex_ena(s=-2): c
+' Set MAC to full-duplex
+'   s:
+'       true (-1 or 1), false (0)
+'       other values:   read the current setting
+    c := mac_readreg(core.HMAC_CR)
+    case abs(s)
+        0, 1:
+            s := (c & core.FDPX_MASK) | ( (s & 1) << core.FDPX)
+            mac_writereg(core.HMAC_CR, s)
+        other:
+            return ( ( (c >> core.FDPX) & 1) == 1)
+
+
 pub mac_rx_enabled(e): c
 ' Enable host MAC receiver
     c := mac_readreg(core.HMAC_CR)
@@ -390,24 +409,185 @@ pub node_address(p_addr) | byte ma[6]
     mac_writereg(core.HMAC_ADDRH, ma[4] | (ma[5] << 8) )
 
 
-pub phy_full_duplex_ena(s=-2): c
-' Set PHY to full-duplex
-'   s:
-'       true (-1 or 1), false (0)
-'       other values:   read the current setting
-    c := mac_readreg(core.HMAC_CR)
-    case abs(s)
-        0, 1:
-            s := (c & core.FDPX_MASK) | ( (s & 1) << core.FDPX)
-            mac_writereg(core.HMAC_CR, s)
+con
+
+    ' PHY auto-MDIX control source
+    PHYAM_STRAPS    = 0
+    PHYAM_OVERRIDE  = 1
+
+
+pub phy_automdix_control(m): c
+' Set PHY auto-MDIX control source
+'   m:
+'       PHYAM_STRAPS:       configuration determined by hardware straps
+'       PHYAM_OVERRIDE:     configuration straps overridden with phy_automdix_mode()
+'       other values:   return the current setting
+    c := phy_readreg(core.PHY_SPECIAL_CTRL_STAT_IND)
+    case m
+        PHYAM_STRAPS, PHYAM_OVERRIDE:
+            m := (c & core.AMDIXCTRL_MASK) | (m & 1) << core.AMDIXCTRL
+            writereg(core.PHY_SPECIAL_CTRL_STAT_IND, m)
         other:
-            return ( ( (c >> core.FDPX) & 1) == 1)
+            return (c >> core.AMDIXCTRL) & 1
+
+
+con
+
+    ' PHY auto-MDIX modes
+    PHYAM_MANUAL    = %00
+    PHYAM_XOVER     = %01
+    PHYAM_AUTO      = %10
+
+
+pub phy_automdix_mode(m): c
+' Set PHY auto-MDIX mode
+'   e:
+'       PHYAM_MANUAL (%00):     manual mode, no crossover
+'       PHYAM_XOVER (%01):      manual mode, crossover
+'       PHYAM_AUTO  (%10):      auto-MDIX mode
+'       other values:   return the current setting
+    c := phy_readreg(core.PHY_SPECIAL_CTRL_STAT_IND)
+    case m
+        %00..%10:
+            m := (c & core.AMDIX_MASK) | (m << core.AMDIX)
+            writereg(core.PHY_SPECIAL_CTRL_STAT_IND, m)
+        other:
+            return (c >> core.AMDIX) & core.AMDIX_BITS
+
+
+con
+
+    ' PHY autonegotiation capabilities advertisement
+    PHYAN_NEXT_PAGE         = 1 << 15
+    PHYAN_REMOTE_FAULT      = 1 << 13
+    PHYAN_EXTD_NEXT_PAGE    = 1 << 12
+    PHYAN_ASYMM_PAUSE       = 1 << 11
+    PHYAN_SYMM_PAUSE        = 1 << 10
+    PHYAN_100BASEX_FDPX     = 1 << 8
+    PHYAN_100BASEX_HDPX     = 1 << 7
+    PHYAN_10BASEX_FDPX      = 1 << 6
+    PHYAN_10BASEX_HDPX      = 1 << 5
+
+
+pub phy_autoneg_advertise_mask(m=-2): c
+' Set PHY autonegotiation capabilities advertisement mask
+'   (bitwise OR together capabilities as desired)
+    phy_writereg(core.PHY_AN_ADV, (m & core.PHY_AN_ADV_REGMASK) | core.SEL_IEEE802_3)
+
+
+pub phy_autoneg_enabled(e=-2): c
+' Enable PHY auto-negotiation
+'   e:
+'       TRUE (-1 or 1): enabled
+'       FALSE (0):      disabled
+'       other values:   return the current setting
+    c := phy_readreg(core.PHY_BASIC_CONTROL)
+    case abs(e)
+        0, 1:
+            e := (c & core.PHY_AN_MASK) | ( (e & 1) << core.PHY_SPEED_SEL_LSB)
+            phy_writereg(core.PHY_BASIC_CONTROL, e)
+        other:
+            return (c >> core.PHY_AN) & 1
+
+
+pub phy_full_duplex_enabled(e=-2): c
+' Enable PHY full-duplex operation when auto-negotiation is disabled
+'   e:
+'       TRUE (-1 or 1): enabled
+'       FALSE (0):      disabled
+'       other values:   return the current setting
+    c := phy_readreg(core.PHY_BASIC_CONTROL)
+    case abs(e)
+        0, 1:
+            e := (c & core.PHY_DUPLEX_MASK) | ( (e & 1) << core.PHY_DUPLEX)
+            phy_writereg(core.PHY_BASIC_CONTROL, e)
+        other:
+            return (c >> core.PHY_DUPLEX) & 1
+
+
+con
+
+    ' PHY interrupt mask
+    PHY_INT_LINK_UP             = 1 << 9        ' link up
+    PHY_INT_ENERGY_ON           = 1 << 7        ' energy on
+    PHY_INT_AUTO_NEGOTIATION    = 1 << 6        ' auto-negotation
+    PHY_INT_REMOTE_FAULT        = 1 << 5        ' remote fault
+    PHY_INT_LINK_DOWN           = 1 << 4        ' link down
+    PHY_INT_AUTO_NEG_LPACK      = 1 << 3        ' auto-negotation link-partner acknowledge
+    PHY_INT_PARALLEL_DET_FAULT  = 1 << 2        ' parallel detection fault
+    PHY_INT_AUTO_NEG_PAGE_RX    = 1 << 1        ' auto-negotation page received
+
+
+pub phy_int_mask(): c
+' Get the currently set PHY interrupt mask
+    return phy_readreg(core.PHY_INT_MASK_REGMASK)
+
+
+pub phy_int_set_mask(m)
+' Set PHY interrupt mask
+'   m:
+'       interrupt source mask
+    m &= core.PHY_INT_MASK_REGMASK
+    phy_writereg(core.PHY_INT_MASK, m)
 
 
 pub phy_link_state(): s
 ' Get the PHY's current link state
     s := 0
     return (phy_readreg(core.PHY_BASIC_STATUS) >> core.LINK_STATE) & 1
+
+
+con
+
+    ' PHY operating mode
+    PHYMD_10BASETHDPX_NO_AN     = %000
+    PHYMD_10BASETFDPX_NO_AN     = %001
+    PHYMD_100BASEX_HDPX_NO_AN   = %010
+    PHYMD_100BASEX_FDPX_NO_AN   = %011
+    PHYMD_100BASEX_FDPX_ADV     = %100
+    PHYMD_POWER_DOWN            = %110
+    PHYMD_ALL_CAPABLE           = %111
+
+
+pub phy_mode(m): c
+' Set PHY operating mode
+'   m:              see 'PHY operating mode' table
+'   other values:   return the current setting
+    c := phy_readreg(core.PHY_SPECIAL_MODES)
+    case m
+        %000..%100, %110, %111:
+            m := (c & core.PHY_MODE_MASK) | (m << core.PHY_MODE)
+            phy_writereg(core.PHY_SPECIAL_MODES, m)
+        other:
+            return (c >> core.PHY_MODE) & core.PHY_MODE_BITS
+
+
+pub phy_sqe_test_enabled(e): c
+' Enable PHY SQE test (heartbeat)
+'   e:
+'       true (-1 or 1), false (0)
+'       other values:           return the current setting
+    c := phy_readreg(core.PHY_SPECIAL_CTRL_STAT_IND)
+    case abs(e)
+        0, 1:
+            e := (c & core.SQEOFF_MASK) | (e ^ 1) << core.SQEOFF
+            writereg(core.PHY_SPECIAL_CTRL_STAT_IND, e)
+        other:
+            return ( (c >> core.SQEOFF) & 1 ) ^ 1
+
+
+pub phy_speed(s): c
+' Set PHY speed when auto-negotiation is disabled
+'   s:              10, 100 (Mbps)
+'   other values:   return the current setting
+    c := phy_readreg(core.PHY_BASIC_CONTROL)
+    case s
+        10, 100:
+            s := (c & core.PHY_SPEED_SEL_LSB_MASK) | ...
+                (lookdownz(s: 10, 100) << core.PHY_SPEED_SEL_LSB)
+            phy_writereg(core.PHY_BASIC_CONTROL, s)
+        other:
+            return (c >> core.PHY_SPEED_SEL_LSB) & 1
 
 
 pub pkt_cnt(): c

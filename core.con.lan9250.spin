@@ -4,7 +4,7 @@
     Description:    LAN9250-specific constants
     Author:         Jesse Burt
     Started:        Jul 27, 2025
-    Updated:        Apr 25, 2026
+    Updated:        Jul 2, 2026
     Copyright (c) 2026 - See end of file for terms of use.
 ----------------------------------------------------------------------------------------------------
 }
@@ -431,6 +431,7 @@ con
     PHY_ID_LSB              = 3
 
     PHY_AN_ADV              = 4
+    PHY_AN_ADV_REGMASK      = $bdff
         ADV_ASYMMETRIC_PAUSE= 11
         ADV_SYMMETRIC_PAUSE = 10
         ADV_100BASEX_FDPX   = 8
@@ -440,6 +441,13 @@ con
         ADV_SELECTOR        = 0
         ADV_SELECTOR_BITS   = %11111
         SEL_IEEE802_3       = %00001
+        ADV_ASYMMETRIC_PAUSE_MASK   = (1 << ADV_ASYMMETRIC_PAUSE) ^ PHY_AN_ADV_REGMASK
+        ADV_SYMMETRIC_PAUSE_MASK    = (1 << ADV_SYMMETRIC_PAUSE) ^ PHY_AN_ADV_REGMASK
+        ADV_100BASEX_FDPX_MASK      = (1 << ADV_100BASEX_FDPX) ^ PHY_AN_ADV_REGMASK
+        ADV_100BASEX_HDPX_MASK      = (1 << ADV_100BASEX_HDPX) ^ PHY_AN_ADV_REGMASK
+        ADV_10BASET_FDPX_MASK       = (1 << ADV_10BASET_FDPX) ^ PHY_AN_ADV_REGMASK
+        ADV_10BASET_HDPX_MASK       = (1 << ADV_10BASET_HDPX) ^ PHY_AN_ADV_REGMASK
+        ADV_SELECTOR_MASK           = ADV_SELECTOR_BITS ^ PHY_AN_ADV_REGMASK
 
     PHY_AN_LP_BASE_ABILITY  = 5
     PHY_AN_EXP              = 6
@@ -470,7 +478,8 @@ con
         AMDIXSTATE                  = 13
         AMDIX                       = 13
         SQEOFF                      = 11
-        AMDIX_BITS                  = %111
+        AMDIXCTRL_MASK              = (1 << AMDIXCTRL) ^ PHY_SPECIAL_CTRL_STAT_IND_MASK
+        AMDIX_BITS                  = %11
         AMDIX_MASK                  = (AMDIX_BITS << AMDIX) ^ PHY_SPECIAL_CTRL_STAT_IND_MASK
         SQEOFF_MASK                 = (1 << SQEOFF) ^ PHY_SPECIAL_CTRL_STAT_IND_MASK
 
@@ -478,7 +487,7 @@ con
     PHY_INT_SRC                 = 29
 
     PHY_INT_MASK                = 30
-    PHY_INT_MASK_MASK           = $02fe
+    PHY_INT_MASK_REGMASK        = $02fe
         INT9_LINK_UP            = 9
         INT7_ENERGY_ON          = 7
         INT4_LINK_DOWN          = 4
@@ -491,6 +500,8 @@ con
         SPEED_IND_BITS                  = %111
         PHY_SPECIAL_CTRL_STATUS_RES_BITS= %000_0010
         PHY_SPECIAL_CTRL_STATUS_RES_MASK= (%111_1111 << PHY_SPECIAL_CTRL_STATUS_RES) ^ PHY_SPECIAL_CTRL_STATUS_MASK
+        PHY_SPECIAL_RESERVED            = %10 << PHY_SPECIAL_CTRL_STATUS_RES
+
 
 dat
 {
