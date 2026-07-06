@@ -4,7 +4,7 @@
     Description:    LAN9250-specific constants
     Author:         Jesse Burt
     Started:        Jul 27, 2025
-    Updated:        Jul 2, 2026
+    Updated:        Jul 6, 2026
     Copyright (c) 2026 - See end of file for terms of use.
 ----------------------------------------------------------------------------------------------------
 }
@@ -328,6 +328,7 @@ con
         DFCHK           = 5
         TXEN            = 3
         RXEN            = 2
+        PRMS_MASK       = (1 << PRMS) ^ HMAC_CR_MASK
         HPFILT_MASK     = (1 << HPFILT) ^ HMAC_CR_MASK
         RCVOWN_MASK     = (1 << RCVOWN) ^ HMAC_CR_MASK
         FDPX_MASK       = (1 << FDPX) ^ HMAC_CR_MASK
@@ -336,7 +337,9 @@ con
         RXEN_MASK       = (1 << RXEN) ^ HMAC_CR_MASK
         MAC_TX_ENA      = (1 << TXEN)
         MAC_RX_ENA      = (1 << RXEN)
-
+        FILT_MASK       = ( (1 << RXALL) | (1 << RCVOWN) | (1 << MCPAS) | (1 << PRMS) | ...
+                            (1 << INVFILT) | (1 << PASSBAD) | (1 << HO) | (1 << HPFILT) | ...
+                            (1 << BCAST) ) ^ HMAC_CR_MASK
 
     HMAC_ADDRH          = $02
     HMAC_ADDRH_MASK     = $0000_ffff

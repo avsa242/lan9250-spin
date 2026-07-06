@@ -600,6 +600,19 @@ pub pkt_cnt(): c
     return ( rx_status_len() > 0 )
 
 
+pub pkt_filter_promiscuous(s): c
+' Enable promiscuous packet filter (pass all incoming frames regardless of destination address)
+'   s:              true (-1 or 1), false
+'   other values:   return the current setting
+    c := mac_readreg(core.HMAC_CR)
+    case abs(s)
+        0, 1:
+            s := (c & core.PRMS_MASK) | ( (s & 1) << core.PRMS)
+            mac_writereg(core.HMAC_CR, s)
+        other:
+            return (c >> core.PRMS) & 1
+
+
 con
 
     ' RX status (use with rx_status() and last_rx_status() )
@@ -747,9 +760,11 @@ pub set_phy_address(a) | tmp
     mac_writereg(core.HMAC_MII_ACC, tmp | ( (a & core.PHY_ADDR_BITS) << core.PHY_ADDR) )
 
 
-pub set_pkt_filter(m)
+pub set_pkt_filter(m) | tmp
 ' Configure the receive packet filter
-    mac_writereg(core.HMAC_CR, m)
+    tmp := mac_readreg(core.HMAC_CR)            ' read the current filter setting
+    tmp := (tmp | m) & core.HMAC_CR_MASK        ' merge new mask bits in
+    mac_writereg(core.HMAC_CR, m)               ' write the updated mask
 
 
 pub set_txfifo_size(s)
