@@ -4,7 +4,7 @@
     Description:    Driver for the LAN9250 Ethernet Transceiver
     Author:         Jesse Burt
     Started:        Jul 27, 2025
-    Updated:        Jul 2, 2026
+    Updated:        Jul 6, 2026
     Copyright (c) 2026 - See end of file for terms of use.
 ----------------------------------------------------------------------------------------------------
 }
@@ -128,6 +128,11 @@ pub fifo_rx_bytes(): b
     _rx_status_len := ( (b >> core.RXSUSED) & core.RXSUSED_BITS )
 
     return (b & core.RXDUSED_BITS)
+
+
+pub fifo_set_rd_ptr(p)
+' Not supported by the hardware
+' Defined for net.eth API compatibility only
 
 
 pub fifo_set_wr_ptr(p)
@@ -634,7 +639,7 @@ con
     CRC_ERROR               = 1 << CRC_ERROR_BIT
 
 
-pub rd_block(p_dest, len) | remaining, buf_rdlen, l, hte
+pub rd_block(p_dest, len): r | remaining, buf_rdlen, l, hte
 ' Read received data from the FIFO
 '   p_dest:     destination to copy the data to (pointer)
 '   len:        length of data to copy
@@ -784,7 +789,7 @@ pub tx_fifo_size(): s
     return ( ( (readreg(core.HW_CFG) >> core.TX_FIF_SZ) & core.TX_FIF_SZ_BITS) * 1024) - 512
 
 
-pub wr_block(p_src, len) | r, byte cmd[3]
+pub wr_block(p_src, len): l | r, byte cmd[3]
 ' Write data to the transmit FIFO
 '   p_src:      source to copy data from (pointer)
 '   len:        length of data to write
