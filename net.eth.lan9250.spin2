@@ -596,8 +596,8 @@ pub phy_speed(s): c
 
 
 pub pkt_cnt(): c
-
-    return ( rx_status_len() > 0 )
+' Get the number of received packets pending
+    return rx_status_len()
 
 
 pub pkt_filter_pass_all_multicast(e): c
