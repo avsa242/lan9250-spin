@@ -600,6 +600,21 @@ pub pkt_cnt(): c
     return ( rx_status_len() > 0 )
 
 
+pub pkt_filter_pass_all_multicast(e): c
+' Set the network filter to pass _all_ multicast frames
+'   s:
+'       true (-1 or 1): pass _all_ multicast frames
+'       false (0):      multicast filtering dependent upon hash/perfect filter configuration
+'       other values:   return the current setting
+    c := mac_readreg(core.HMAC_CR)
+    case abs(e)
+        0, 1:
+            e := (c & core.MCPAS_MASK) | ( (e & 1) << core.MCPAS)
+            mac_writereg(core.HMAC_CR, e)
+        other:
+            return (c >> core.MCPAS) & 1
+
+
 pub pkt_filter_promiscuous(s): c
 ' Enable promiscuous packet filter (pass all incoming frames regardless of destination address)
 '   s:              true (-1 or 1), false

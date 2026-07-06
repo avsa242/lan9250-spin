@@ -328,6 +328,7 @@ con
         DFCHK           = 5
         TXEN            = 3
         RXEN            = 2
+        MCPAS_MASK      = (1 << MCPAS) ^ HMAC_CR_MASK
         PRMS_MASK       = (1 << PRMS) ^ HMAC_CR_MASK
         HPFILT_MASK     = (1 << HPFILT) ^ HMAC_CR_MASK
         RCVOWN_MASK     = (1 << RCVOWN) ^ HMAC_CR_MASK
